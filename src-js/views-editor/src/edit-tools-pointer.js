@@ -42,6 +42,7 @@ import {
   enforceSmartNodes,
   hasSmartNodes,
 } from "./smart-nodes.js";
+import { handleTunniDrag, tunniHitTest, tunniLayerOn } from "./tunni-lines.js";
 import {
   glyphSelector,
   registerVisualizationLayerDefinition,
@@ -62,8 +63,43 @@ export class PointerTool extends BaseTool {
   iconPath = "/images/pointer.svg";
   identifier = "pointer-tool";
 
+  _tunniHit(event) {
+    // the Tunni line or control dot under the pointer, when the layer is on and a glyph is being edited
+    if (!tunniLayerOn(this.editor) || !this.sceneSettings.selectedGlyph?.isEditing) {
+      return null;
+    }
+    const glyph = this.sceneModel.getSelectedPositionedGlyph()?.glyph;
+    const point = this.sceneController.selectedGlyphPoint(event);
+    if (!glyph?.path || !point) {
+      return null;
+    }
+    return tunniHitTest(glyph.path, point, this.sceneController.mouseClickMargin * 0.6);
+  }
+
   handleHover(event) {
     const sceneController = this.sceneController;
+    const tunniHit = this._tunniHit(event);
+    const pointHitFirst = this.sceneModel.selectionAtPoint(
+      sceneController.localPoint(event),
+      sceneController.mouseClickMargin,
+      sceneController.selection,
+      sceneController.hoverSelection,
+      event.altKey
+    ).selection?.size;
+    const hoverTunni = tunniHit && !pointHitFirst ? tunniHit : undefined;
+    if (
+      this.sceneModel.hoverTunni?.indices?.[1] !== hoverTunni?.indices?.[1] ||
+      this.sceneModel.hoverTunni?.part !== hoverTunni?.part
+    ) {
+      this.sceneModel.hoverTunni = hoverTunni;
+      this.canvasController.requestUpdate();
+    }
+    if (hoverTunni) {
+      sceneController.hoverSelection = new Set();
+      sceneController.hoverPathHit = undefined;
+      this.setCursor("grab");
+      return;
+    }
     const point = sceneController.localPoint(event);
     const size = sceneController.mouseClickMargin;
     const selRect = centeredRect(point.x, point.y, size);
@@ -161,6 +197,16 @@ export class PointerTool extends BaseTool {
     }
 
     const sceneController = this.sceneController;
+    if (this.sceneModel.hoverTunni && this.sceneModel.canEdit) {
+      // a drag that starts on a Tunni line moves its two handles (Alt: the nearer one only)
+      const hit = this._tunniHit(initialEvent);
+      if (hit) {
+        this.setCursor("grabbing");
+        await handleTunniDrag(this, eventStream, initialEvent, hit);
+        this.setCursor("grab");
+        return;
+      }
+    }
     const initialSelection = sceneController.selection;
     const resizeHandle = this.getResizeHandle(initialEvent, initialSelection);
     const rotationHandle = this.getRotationHandle(initialEvent, initialSelection);
