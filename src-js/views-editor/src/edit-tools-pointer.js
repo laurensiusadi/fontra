@@ -43,6 +43,7 @@ import {
   hasSmartNodes,
 } from "./smart-nodes.js";
 import { handleTunniDrag, tunniHitTest, tunniLayerOn } from "./tunni-lines.js";
+import "./curvature-comb.js";
 import {
   glyphSelector,
   registerVisualizationLayerDefinition,
