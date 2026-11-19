@@ -44,6 +44,7 @@ import {
 } from "./smart-nodes.js";
 import {
   handleTunniDrag,
+  balanceTunni,
   toggleTunniPin,
   tunniHitTest,
   tunniLayerOn,
@@ -218,6 +219,18 @@ export class PointerTool extends BaseTool {
       // a drag that starts on a Tunni line moves its two handles (Alt: the nearer one only)
       const hit = this._tunniHit(initialEvent);
       if (hit) {
+        if (initialEvent.detail == 2 || initialEvent.myTapCount == 2) {
+          // a double click balances the two handles (same tension, the dot on the target line); its first click had toggled the pin, so toggle it back
+          initialEvent.preventDefault(); // as the pointer's own double click: no further handling
+          eventStream.done();
+          toggleTunniPin(
+            this.sceneModel,
+            this.sceneModel.getSelectedPositionedGlyph()?.glyphName,
+            hit
+          );
+          await balanceTunni(sceneController, hit);
+          return;
+        }
         if (!(await shouldInitiateDrag(eventStream, initialEvent))) {
           // a click pins the line so it stays shown after the pointer leaves; a second click unpins it
           toggleTunniPin(

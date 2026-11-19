@@ -156,6 +156,36 @@ function handlesFromControl(path, indices, control, snapMargin) {
   return [add(p0, mul(a, f1)), add(p3, mul(b, f2))];
 }
 
+// Balance a segment's two handles, in every editing layer, as one undo step: the control dot moves onto the target line (the
+// diagonal from the nodes' midpoint through T), keeping its distance along that line, so both handles end at one shared
+// percentage, f = ((f1 a + f2 b) . (a + b)) / |a + b|^2 with a = T - p0 and b = T - p3 (the mean of f1 and f2 when a and b are equally long).
+export async function balanceTunni(sceneController, hit) {
+  await sceneController.editLayersAndRecordChanges((layerGlyphs) => {
+    for (const layerGlyph of Object.values(layerGlyphs)) {
+      const path = layerGlyph.path;
+      const [i0, i1, i2, i3] = hit.indices;
+      const p0 = pointAt(path, i0);
+      const p3 = pointAt(path, i3);
+      const info = tunniInfo(p0, pointAt(path, i1), pointAt(path, i2), p3);
+      if (!info) {
+        continue;
+      }
+      const a = sub(info.T, p0);
+      const b = sub(info.T, p3);
+      const w = add(a, b);
+      const f =
+        dot(add(mul(a, info.f1), mul(b, info.f2)), w) / Math.max(dot(w, w), 1e-9);
+      const h1 = add(p0, mul(a, f));
+      const h2 = add(p3, mul(b, f));
+      path.setPointPosition(i1, h1.x, h1.y);
+      path.setPointPosition(i2, h2.x, h2.y);
+      // genius nodes beside the handles re-solve; the path is its own starting state here (path.copy() is not usable inside the recording proxy), so servants stay put
+      enforceSmartNodes(path, path);
+    }
+    return "Balance Tunni handles";
+  });
+}
+
 // A segment pinned by a click keeps its Tunni line shown after the pointer leaves it; keyed by glyph and the segment's first handle.
 export function tunniPinKey(glyphName, seg) {
   return `${glyphName}/${seg.indices[1]}`;
