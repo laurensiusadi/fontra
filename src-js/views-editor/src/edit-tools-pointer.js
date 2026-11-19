@@ -38,6 +38,11 @@ import { handlesEqual } from "./edit-tools-pen.js";
 import { getPinPoint } from "./panel-transformation.js";
 import { equalGlyphSelection } from "./scene-controller.js";
 import {
+  changedPointIndices,
+  enforceSmartNodes,
+  hasSmartNodes,
+} from "./smart-nodes.js";
+import {
   glyphSelector,
   registerVisualizationLayerDefinition,
   strokeRoundNode,
@@ -386,8 +391,13 @@ export class PointerTool extends BaseTool {
           shouldConnect: false,
           behaviorFactory,
           editBehavior: behaviorFactory.getBehavior(behaviorName),
+          smart: hasSmartNodes(layerGlyph.path),
+          initialPath: layerGlyph.path.copy(),
         };
       });
+      const movedPoints = new Set(
+        parseSelection(sceneController.selection).point || []
+      );
 
       assert(layerInfo.length >= 1, "no layer to edit");
 
@@ -422,6 +432,15 @@ export class PointerTool extends BaseTool {
           const editChange = layer.editBehavior.makeChangeForDelta(delta);
           applyChange(layer.layerGlyph, editChange);
           deepEditChanges.push(consolidateChanges(editChange, layer.changePath));
+          if (layer.smart) {
+            // genius and servant nodes follow the edit (smart-nodes.js)
+            const smartChange = recordChanges(layer.layerGlyph, (g) =>
+              enforceSmartNodes(g.path, layer.initialPath, movedPoints)
+            );
+            deepEditChanges.push(
+              consolidateChanges(smartChange.change, layer.changePath)
+            );
+          }
           layer.shouldConnect = layer.connectDetector.shouldConnect(
             layer.isPrimaryLayer
           );
@@ -439,6 +458,23 @@ export class PointerTool extends BaseTool {
           )
         )
       );
+      for (const layer of layerInfo) {
+        if (!layer.smart) {
+          continue;
+        }
+        // every point the smart rules moved joins the drag's one undo step
+        const touched = changedPointIndices(layer.layerGlyph.path, layer.initialPath);
+        const finals = touched.map((i) => layer.layerGlyph.path.getPointPosition(i));
+        recordChanges(layer.layerGlyph, (g) =>
+          touched.forEach((i) =>
+            g.path.setPointPosition(i, ...layer.initialPath.getPointPosition(i))
+          )
+        );
+        const smartFinal = recordChanges(layer.layerGlyph, (g) =>
+          touched.forEach((i, k) => g.path.setPointPosition(i, ...finals[k]))
+        );
+        changes = changes.concat(smartFinal.prefixed(layer.changePath));
+      }
       let shouldConnect;
       for (const layer of layerInfo) {
         if (!layer.shouldConnect) {

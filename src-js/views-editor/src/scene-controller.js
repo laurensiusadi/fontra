@@ -69,8 +69,10 @@ import { GlyphSource, Layer } from "@fontra/core/var-glyph.js";
 import { isLocationAtDefault } from "@fontra/core/var-model.js";
 import { VarPackedPath, packContour } from "@fontra/core/var-path.js";
 import * as vector from "@fontra/core/vector.js";
+import { MenuItemDivider } from "@fontra/web-components/menu-panel.js";
 import { dialog, message } from "@fontra/web-components/modal-dialog.js";
 import { EditBehaviorFactory } from "./edit-behavior.js";
+import { enforceSmartNodes, nodeKind, setNodeKind } from "./smart-nodes.js";
 import { SceneModel } from "./scene-model.js";
 
 // Minimum pixels per em and maximum pixels per unit for zooming out and in.
@@ -689,6 +691,21 @@ export class SceneController {
       () => this.contextMenuState.pointSelection?.length
     );
 
+    // smart nodes (smart-nodes.js): Genius keeps G2; X/Y servants follow their neighbours
+    for (const [id, label, toggle] of [
+      ["action.node.genius", "Genius", "genius"],
+      ["action.node.x-servant", "X-Servant", "x"],
+      ["action.node.y-servant", "Y-Servant", "y"],
+    ]) {
+      registerAction(
+        id,
+        { topic },
+        () => this.doToggleNodeKind(toggle),
+        () => this.contextMenuState.pointSelection?.length,
+        () => (this._allSelectedHaveKind(toggle) ? "✓ " : "") + label
+      );
+    }
+
     registerAction(
       "action.decompose-component",
       {
@@ -1052,6 +1069,11 @@ export class SceneController {
       { actionIdentifier: "action.break-contour" },
       { actionIdentifier: "action.reverse-contour" },
       { actionIdentifier: "action.set-contour-start" },
+      MenuItemDivider,
+      { actionIdentifier: "action.node.genius" },
+      { actionIdentifier: "action.node.x-servant" },
+      { actionIdentifier: "action.node.y-servant" },
+      MenuItemDivider,
       {
         title: translate("action.glyph.convert-curves"),
         getItems: () => [
@@ -1591,6 +1613,62 @@ export class SceneController {
 
       this.selection = newSelection;
       return translate("action.set-contour-start");
+    });
+  }
+
+  _selectedOnCurveKinds() {
+    // [pointIndex, kind] for the selected on-curve points of the editing glyph
+    const path = this.sceneModel.getSelectedPositionedGlyph()?.glyph?.path;
+    const indices = this.contextMenuState.pointSelection || [];
+    if (!path) {
+      return [];
+    }
+    return indices
+      .filter((i) => path.getPoint(i) && !path.getPoint(i).type)
+      .map((i) => [i, nodeKind(path, i)]);
+  }
+
+  _allSelectedHaveKind(toggle) {
+    const kinds = this._selectedOnCurveKinds();
+    if (!kinds.length) {
+      return false;
+    }
+    const has = (k) =>
+      toggle === "genius"
+        ? k === "genius"
+        : k === "xyservant" || k === `${toggle}servant`;
+    return kinds.every(([, k]) => has(k));
+  }
+
+  async doToggleNodeKind(toggle) {
+    const kinds = this._selectedOnCurveKinds();
+    if (!kinds.length) {
+      return;
+    }
+    const turnOn = !this._allSelectedHaveKind(toggle);
+    const newKind = (k) => {
+      if (toggle === "genius") {
+        return turnOn ? "genius" : null;
+      }
+      let x = k === "xservant" || k === "xyservant";
+      let y = k === "yservant" || k === "xyservant";
+      if (toggle === "x") {
+        x = turnOn;
+      } else {
+        y = turnOn;
+      }
+      return x && y ? "xyservant" : x ? "xservant" : y ? "yservant" : null;
+    };
+    await this.editLayersAndRecordChanges((layerGlyphs) => {
+      for (const layerGlyph of Object.values(layerGlyphs)) {
+        for (const [index, kind] of kinds) {
+          setNodeKind(layerGlyph.path, [index], newKind(kind));
+        }
+        // a new genius node snaps to G2 at once; the path is its own starting state here (inside
+        // the recording proxy, path.copy() is not a usable path), so servants stay where they are
+        enforceSmartNodes(layerGlyph.path, layerGlyph.path);
+      }
+      return `${turnOn ? "Set" : "Clear"} ${toggle === "genius" ? "Genius" : toggle.toUpperCase() + "-Servant"}`;
     });
   }
 
