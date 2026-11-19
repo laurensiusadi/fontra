@@ -44,6 +44,7 @@ import {
 } from "./smart-nodes.js";
 import { handleTunniDrag, tunniHitTest, tunniLayerOn } from "./tunni-lines.js";
 import "./curvature-comb.js";
+import { hoverRulerOn } from "./hover-ruler.js";
 import {
   glyphSelector,
   registerVisualizationLayerDefinition,
@@ -79,6 +80,16 @@ export class PointerTool extends BaseTool {
 
   handleHover(event) {
     const sceneController = this.sceneController;
+    // the hover ruler measures at the pointer, in the edited glyph's coordinates
+    const rulerPoint =
+      hoverRulerOn(this.editor) && this.sceneSettings.selectedGlyph?.isEditing
+        ? sceneController.selectedGlyphPoint(event)
+        : undefined;
+    if (rulerPoint || this.sceneModel.hoverRulerPoint) {
+      this.sceneModel.hoverRulerPoint = rulerPoint;
+      this.sceneModel.hoverRulerShift = event.shiftKey;
+      this.canvasController.requestUpdate();
+    }
     const tunniHit = this._tunniHit(event);
     const pointHitFirst = this.sceneModel.selectionAtPoint(
       sceneController.localPoint(event),
