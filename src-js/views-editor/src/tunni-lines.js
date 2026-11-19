@@ -156,6 +156,19 @@ function handlesFromControl(path, indices, control, snapMargin) {
   return [add(p0, mul(a, f1)), add(p3, mul(b, f2))];
 }
 
+// A segment pinned by a click keeps its Tunni line shown after the pointer leaves it; keyed by glyph and the segment's first handle.
+export function tunniPinKey(glyphName, seg) {
+  return `${glyphName}/${seg.indices[1]}`;
+}
+
+export function toggleTunniPin(sceneModel, glyphName, seg) {
+  sceneModel.pinnedTunni ??= new Set();
+  const key = tunniPinKey(glyphName, seg);
+  if (!sceneModel.pinnedTunni.delete(key)) {
+    sceneModel.pinnedTunni.add(key);
+  }
+}
+
 export function tunniLayerOn(editor) {
   return !!editor.visualizationLayersSettings.model[TUNNI_LAYER];
 }
@@ -332,10 +345,13 @@ registerVisualizationLayerDefinition({
     for (const seg of iterTunniSegments(path)) {
       const [p0, p1, p2, p3] = seg.points;
       const hovered = hover && hover.indices[1] === seg.indices[1];
-      if (!hovered) {
-        continue; // only the segment under the pointer shows its Tunni line, dot and labels
+      const pinned = model.pinnedTunni?.has(
+        tunniPinKey(positionedGlyph.glyphName, seg)
+      );
+      if (!hovered && !pinned) {
+        continue; // only the segment under the pointer, or one pinned by a click, shows its Tunni line, dot and labels
       }
-      {
+      if (hovered) {
         // guides for the line in hand: the target line from the nodes' midpoint through the Tunni
         // point (fixed by the nodes and handle directions, so it never turns while dragging), a
         // tick across it at that point, and the ideal ring (both handles at 55.2 %, on the line)

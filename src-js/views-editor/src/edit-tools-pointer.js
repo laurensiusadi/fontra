@@ -42,7 +42,12 @@ import {
   enforceSmartNodes,
   hasSmartNodes,
 } from "./smart-nodes.js";
-import { handleTunniDrag, tunniHitTest, tunniLayerOn } from "./tunni-lines.js";
+import {
+  handleTunniDrag,
+  toggleTunniPin,
+  tunniHitTest,
+  tunniLayerOn,
+} from "./tunni-lines.js";
 import "./curvature-comb.js";
 import { hoverRulerOn } from "./hover-ruler.js";
 import {
@@ -213,6 +218,16 @@ export class PointerTool extends BaseTool {
       // a drag that starts on a Tunni line moves its two handles (Alt: the nearer one only)
       const hit = this._tunniHit(initialEvent);
       if (hit) {
+        if (!(await shouldInitiateDrag(eventStream, initialEvent))) {
+          // a click pins the line so it stays shown after the pointer leaves; a second click unpins it
+          toggleTunniPin(
+            this.sceneModel,
+            this.sceneModel.getSelectedPositionedGlyph()?.glyphName,
+            hit
+          );
+          this.canvasController.requestUpdate();
+          return;
+        }
         this.setCursor("grabbing");
         await handleTunniDrag(this, eventStream, initialEvent, hit);
         this.setCursor("grab");
