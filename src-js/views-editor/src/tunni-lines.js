@@ -351,7 +351,7 @@ registerVisualizationLayerDefinition({
       if (!hovered && !pinned) {
         continue; // only the segment under the pointer, or one pinned by a click, shows its Tunni line, dot and labels
       }
-      if (hovered) {
+      if (hovered || pinned) {
         // guides for the line in hand: the target line from the nodes' midpoint through the Tunni
         // point (fixed by the nodes and handle directions, so it never turns while dragging), a
         // tick across it at that point, and the ideal ring (both handles at 55.2 %, on the line)
@@ -380,7 +380,8 @@ registerVisualizationLayerDefinition({
         context.stroke();
         context.restore();
       }
-      context.lineWidth = hovered ? parameters.hoverWidth : parameters.strokeWidth;
+      context.lineWidth =
+        hovered || pinned ? parameters.hoverWidth : parameters.strokeWidth;
       strokeDashed(context, p1, p2, dash);
       const r =
         (hovered && hover.part === "control"
