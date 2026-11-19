@@ -228,7 +228,7 @@ export class PointerTool extends BaseTool {
             this.sceneModel.getSelectedPositionedGlyph()?.glyphName,
             hit
           );
-          await balanceTunni(sceneController, hit);
+          await balanceTunni(sceneController, hit, hit.part === "control"); // on the dot: to the ideal ring
           return;
         }
         if (!(await shouldInitiateDrag(eventStream, initialEvent))) {

@@ -159,7 +159,8 @@ function handlesFromControl(path, indices, control, snapMargin) {
 // Balance a segment's two handles, in every editing layer, as one undo step: the control dot moves onto the target line (the
 // diagonal from the nodes' midpoint through T), keeping its distance along that line, so both handles end at one shared
 // percentage, f = ((f1 a + f2 b) . (a + b)) / |a + b|^2 with a = T - p0 and b = T - p3 (the mean of f1 and f2 when a and b are equally long).
-export async function balanceTunni(sceneController, hit) {
+// With toIdeal, both handles go to the ideal tension instead: the dot onto the ideal ring.
+export async function balanceTunni(sceneController, hit, toIdeal = false) {
   await sceneController.editLayersAndRecordChanges((layerGlyphs) => {
     for (const layerGlyph of Object.values(layerGlyphs)) {
       const path = layerGlyph.path;
@@ -173,8 +174,9 @@ export async function balanceTunni(sceneController, hit) {
       const a = sub(info.T, p0);
       const b = sub(info.T, p3);
       const w = add(a, b);
-      const f =
-        dot(add(mul(a, info.f1), mul(b, info.f2)), w) / Math.max(dot(w, w), 1e-9);
+      const f = toIdeal
+        ? IDEAL_TENSION
+        : dot(add(mul(a, info.f1), mul(b, info.f2)), w) / Math.max(dot(w, w), 1e-9);
       const h1 = add(p0, mul(a, f));
       const h2 = add(p3, mul(b, f));
       path.setPointPosition(i1, h1.x, h1.y);
@@ -182,7 +184,7 @@ export async function balanceTunni(sceneController, hit) {
       // genius nodes beside the handles re-solve; the path is its own starting state here (path.copy() is not usable inside the recording proxy), so servants stay put
       enforceSmartNodes(path, path);
     }
-    return "Balance Tunni handles";
+    return toIdeal ? "Tunni handles to ideal" : "Balance Tunni handles";
   });
 }
 
