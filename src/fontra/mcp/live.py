@@ -1,12 +1,12 @@
-"""MCP server (stdio) that joins a running `fontra filesystem` project as a second client, so Claude and the user edit the same glyphs live.
+"""MCP server (stdio) that joins a running `fontra filesystem` project as a second client, so any MCP agent (Claude Code, Codex, Cursor, …) and the user edit the same glyphs live.
 
-    <fontra-venv>/bin/python -m fontra.mcp.live DIR [PROJECT]       # starts `fontra filesystem DIR` on FONTRA_PORT (8000) if nothing answers there
-    <fontra-venv>/bin/python -m fontra.mcp.live URL [PROJECT]       # only connects; default http://localhost:8000 OvernightSans-Regular.ufo
+    <fontra-venv>/bin/python -m fontra.mcp.live DIR [PROJECT]       # starts `fontra filesystem DIR` on FONTRA_PORT (8769) if nothing answers there
+    <fontra-venv>/bin/python -m fontra.mcp.live URL [PROJECT]       # only connects; default http://localhost:8769 OvernightSans-Regular.ufo
     <fontra-venv>/bin/python -m fontra.mcp.live --selftest
 
 Tools: get_glyph, put_glyph, changes_since, check, diff, render, measure, status. Points are [x, y, type] with type "on", "smooth", "off" (cubic) or "qoff" (quadratic); point numbers are Fontra's (one count across contours). Checks, diffs and drawings come from glyphcheck.py.
 
-A status page (http://127.0.0.1:8765, next free port up to 8770) shows the link, the Fontra server and recent activity, and turns the link off and Fontra on or off. Runs with the Fontra environment's python (aiohttp, numpy, Pillow, fontTools).
+A status page (http://127.0.0.1:8780, next free port up to 8785) shows the link, the Fontra server and recent activity, and turns the link off and Fontra on or off. Runs with the Fontra environment's python (aiohttp, numpy, Pillow, fontTools).
 """
 import asyncio
 import base64
@@ -29,14 +29,15 @@ from aiohttp import web
 
 from fontra.mcp import glyphcheck as gc
 
-ARG = sys.argv[1] if len(sys.argv) > 1 and not sys.argv[1].startswith("-") else "http://localhost:8000"
+FONTRA_PORT = os.environ.get("FONTRA_PORT", "8769")   # not Fontra's stock 8000, which other dev servers often hold
+ARG = sys.argv[1] if len(sys.argv) > 1 and not sys.argv[1].startswith("-") else f"http://localhost:{FONTRA_PORT}"
 SERVE_DIR = os.path.abspath(ARG) if os.path.isdir(ARG) else None    # a folder: start `fontra filesystem` on it if nothing answers
-URL = f"http://localhost:{os.environ.get('FONTRA_PORT', '8000')}" if SERVE_DIR else ARG
+URL = f"http://localhost:{FONTRA_PORT}" if SERVE_DIR else ARG
 PROJECT = sys.argv[2] if len(sys.argv) > 2 else "OvernightSans-Regular.ufo"
 OUT = os.environ.get("FONTRA_LIVE_OUT", "/tmp/fontra-live")
 TYPES = {0: "on", 8: "smooth", 2: "off", 1: "qoff"}
 CODES = {v: k for k, v in TYPES.items()}
-STATE = dict(link=True, stopped_by_user=False, log=collections.deque(maxlen=60), image=None, ui=None, since=time.time())
+STATE = dict(client="Agent", link=True, stopped_by_user=False, log=collections.deque(maxlen=60), image=None, ui=None, since=time.time())
 
 
 def log(source, title, summary=""):
@@ -140,7 +141,7 @@ class Fontra:
         self.ids = itertools.count()
         self.futures = {}
         self.events = []        # (glyph names, isLive) for every externalChange the server pushed us
-        self.snap = {}          # (glyph, layer) -> (contours, advance) as last seen by Claude
+        self.snap = {}          # (glyph, layer) -> (contours, advance) as last seen by the agent
         self.glyph_map = self.sources = None
 
     @property
@@ -165,12 +166,12 @@ class Fontra:
         asyncio.create_task(self.reader(self.ws))
         self.glyph_map = self.sources = None
         await self.call("subscribeChanges", {"glyphs": None}, False)
-        log("Claude", "Connected to Fontra", self.project)
+        log("Agent","Connected to Fontra", self.project)
 
     async def disconnect(self):
         if self.connected:
             await self.ws.close()
-            log("Claude", "Disconnected from Fontra")
+            log("Agent","Disconnected from Fontra")
 
     async def up(self):
         self.session = self.session or aiohttp.ClientSession()
@@ -191,7 +192,7 @@ class Fontra:
         for _ in range(60):
             await asyncio.sleep(0.25)
             if await self.up():
-                log("Claude", "Started Fontra", f"{SERVE_DIR} on port {port}")
+                log("Agent","Started Fontra", f"{SERVE_DIR} on port {port}")
                 return
         raise ConnectionError(f"fontra did not start on {self.url}; see {OUT}/fontra.log")
 
@@ -297,14 +298,14 @@ async def t_put_glyph(glyph, contours=None, moves=None, advance=None, layer=None
     if advance is not None:
         fwd.append({"f": "=", "a": ["xAdvance", advance]})
         back.append({"f": "=", "a": ["xAdvance", adv]})
-    await F.call("editFinal", {"p": base, "c": fwd}, {"p": base, "c": back}, "Claude: put_glyph", True)
+    await F.call("editFinal", {"p": base, "c": fwd}, {"p": base, "c": back}, f"{STATE['client']}: put_glyph", True)
     F.snap[(glyph, layer)] = (new, advance if advance is not None else adv)
     m = await F.metrics(g, layer)
     key = lambda it: (it["kind"], tuple(it["points"]))  # noqa: E731
     before = {key(it) for it in gc.check(old, m)}
     introduced = [it for it in gc.check(new, m) if key(it) not in before and it["severity"] != "info"]
     d = gc.diff(old, new)
-    log("Claude", f"Edited {glyph}", f"{len(d.get('points', []))} points moved, outline moved up to {d.get('max_deviation', 0)} u" + (f", {len(introduced)} new issues" if introduced else ""))
+    log("Agent",f"Edited {glyph}", f"{len(d.get('points', []))} points moved, outline moved up to {d.get('max_deviation', 0)} u" + (f", {len(introduced)} new issues" if introduced else ""))
     return {"glyph": glyph, "layer": layer, "changed": d.get("points") or d.get("structure"), "max_deviation": d.get("max_deviation"),
             "new_issues": issue_lines(introduced) or ["none"]}
 
@@ -330,7 +331,7 @@ async def t_check(glyph, layer=None, outer=None, png=False):
     m = await F.metrics(g, layer)
     issues = gc.check(contours, m, outer=outer)
     counts = collections.Counter(it["severity"] for it in issues)
-    log("Claude", f"Checked {glyph}", ", ".join(f"{v} {k}" for k, v in counts.items()) or "clean")
+    log("Agent",f"Checked {glyph}", ", ".join(f"{v} {k}" for k, v in counts.items()) or "clean")
     out = {"glyph": glyph, "layer": layer, "counts": dict(counts), "issues": issue_lines(issues) or ["clean"]}
     if not png:
         return out
@@ -354,11 +355,11 @@ def baseline_path(against):
 
 
 async def baseline(glyph, layer, against):
-    """Contours to compare the live glyph with: 'snapshot' (what Claude last saw), 'base' (EDIT_DIR-base/<font>.otf), 'previous' (newest save in edit-history), 'layer:NAME', or a font path."""
+    """Contours to compare the live glyph with: 'snapshot' (what the agent last saw), 'base' (EDIT_DIR-base/<font>.otf), 'previous' (newest save in edit-history), 'layer:NAME', or a font path."""
     if against == "snapshot":
         if (glyph, layer) not in F.snap:
             raise KeyError("no snapshot yet; call get_glyph first")
-        return F.snap[(glyph, layer)][0], "Claude's last snapshot"
+        return F.snap[(glyph, layer)][0], "the agent's last snapshot"
     if against.startswith("layer:"):
         _, _, cons, _ = await F.glyph(glyph, against[6:])
         return cons, against
@@ -371,7 +372,7 @@ async def t_diff(glyph, against="base", layer=None, amplify=10, png=True):
     g, layer, cur, _ = await F.glyph(glyph, layer)
     base, label = await baseline(glyph, layer, against)
     d = gc.diff(base, cur)
-    log("Claude", f"Diffed {glyph}", f"against {against}: outline moved up to {d.get('max_deviation')} u")
+    log("Agent",f"Diffed {glyph}", f"against {against}: outline moved up to {d.get('max_deviation')} u")
     out = {"glyph": glyph, "layer": layer, "against": label, **d}
     if not png:
         return out
@@ -385,7 +386,7 @@ async def t_measure(glyph="n", name="n_anatomy", layer=None):
     if not xh:
         _, _, xc, _ = await F.glyph("x")
         xh = max(p[1] for p in gc.sample(xc)[0])
-    log("Claude", f"Measured {glyph}", name)
+    log("Agent",f"Measured {glyph}", name)
     return {"glyph": glyph, "layer": layer, name: MEASURES[name](gc.polygons(contours, 0.5), xh)}
 
 
@@ -409,7 +410,7 @@ async def t_render(glyph, layer=None, reference=None, against=None, amplify=10, 
         zoom = (x, y, zoom_radius)
     img = gc.draw(contours, base=base, ref=ref, amplify=amplify, comb=comb, labels=labels, issues=iss, zoom=zoom, metrics=m, size=size)
     path, im = image(img, f"{glyph}.png")
-    log("Claude", f"Rendered {glyph}", ("zoom on point %s" % zoom_point) if zoom else "")
+    log("Agent",f"Rendered {glyph}", ("zoom on point %s" % zoom_point) if zoom else "")
     text = path + ("  (black: reference at the same x-height)" if reference else "")
     if iss:
         text += "\n" + "\n".join(issue_lines(iss))
@@ -424,13 +425,13 @@ S = {"type": "string"}
 N = {"type": "number"}
 B = {"type": "boolean"}
 LAYER = {"type": "string", "description": "layer name; default the glyph's first source layer"}
-AGAINST = {"type": "string", "description": "'base' (the frozen baseline OTF), 'previous' (newest save in edit-history), 'snapshot' (what Claude last read or wrote), 'layer:NAME', or a font path"}
+AGAINST = {"type": "string", "description": "'base' (the frozen baseline OTF), 'previous' (newest save in edit-history), 'snapshot' (what you last read or wrote), 'layer:NAME', or a font path"}
 TOOLS = {
     "get_glyph": (t_get_glyph, "Points, contours and advance of a glyph as Fontra has it now (including edits from the open tab).",
                   {"glyph": S, "layer": LAYER}, ["glyph"]),
     "put_glyph": (t_put_glyph, "Replace a glyph's outline (and optionally advance) through Fontra; the open browser tab updates live. Give `contours` ([[ [x,y,type], ...], ...]) to replace, or `moves` ([[pointIndex, dx, dy], ...]) to nudge points. Returns the moved points and any check issues the edit introduced.",
                   {"glyph": S, "layer": LAYER, "contours": {"type": "array"}, "moves": {"type": "array"}, "advance": N}, ["glyph"]),
-    "changes_since": (t_changes_since, "What changed in a glyph since Claude last read or wrote it: moved points, regions where the outline moved (signed units, + is ink added), ink change, and how many edits the user's tab pushed.",
+    "changes_since": (t_changes_since, "What changed in a glyph since you last read or wrote it: moved points, regions where the outline moved (signed units, + is ink added), ink change, and how many edits the user's tab pushed.",
                       {"glyph": S, "layer": LAYER}, ["glyph"]),
     "check": (t_check, "Find flaws too small to see: extra nodes, smooth nodes with bent handles, almost-smooth kinks, crooked lines and handles (units off axis), near-miss alignments between nodes and to metric lines, missing extremes, curvature jumps and reversals, S-bends, tiny segments, handles past their crossing, contour direction. png=true adds a labelled drawing with a curvature comb.",
               {"glyph": S, "layer": LAYER, "outer": {"type": "string", "enum": ["cw", "ccw"], "description": "require this outer-contour direction; default: consistent within the glyph"}, "png": B}, ["glyph"]),
@@ -463,32 +464,32 @@ button:disabled{opacity:.4;cursor:default}.actions{display:flex;gap:8px;margin-t
 a{color:var(--blue)}img{max-width:100%;border-radius:8px;border:1px solid var(--line);background:#fff;margin-top:8px}
 .log{list-style:none;margin:0;padding:0}.log li{padding:8px 0;border-top:1px solid var(--line)}.log li:first-child{border-top:0}
 .src{font-size:14px;padding:1px 8px;border-radius:99px;margin-right:8px;border:1px solid}
-.Claude{color:var(--blue);border-color:var(--blue)}.Fontra{color:var(--green);border-color:var(--green)}
+.Agent{color:var(--blue);border-color:var(--blue)}.Fontra{color:var(--green);border-color:var(--green)}
 .time{color:var(--mute);font-size:15px;font-variant-numeric:tabular-nums}
 </style></head><body><main><h1>Fontra live</h1>
-<div class="card"><div class="row"><span class="name">Claude link</span><span id="linkTag" class="tag off">…</span></div>
+<div class="card"><div class="row"><span class="name" id="linkName">Agent link</span><span id="linkTag" class="tag off">…</span></div>
 <div class="detail" id="linkDetail"></div><div class="actions"><button id="linkBtn"></button></div></div>
 <div class="card"><div class="row"><span class="name">Fontra server</span><span id="fTag" class="tag off">…</span></div>
 <div class="detail" id="fDetail"></div><div class="actions"><button id="fStart">Start</button><button id="fStop">Stop</button></div></div>
 <div class="card"><div class="row"><span class="name">MCP server</span><span class="tag on" id="mTag">Running</span></div>
 <div class="detail" id="mDetail"></div></div>
-<div class="card"><div class="row"><span class="name">Activity</span><span class="detail"><span class="src Claude">Claude</span><span class="src Fontra">You in Fontra</span></span></div><ul class="log" id="log"></ul></div>
-<div class="card" id="imgCard" hidden><div class="row"><span class="name">Last image</span><span class="time" id="imgName"></span></div><img id="img" alt="Last image Claude drew"></div>
+<div class="card"><div class="row"><span class="name">Activity</span><span class="detail"><span class="src Agent">Agent</span><span class="src Fontra">You in Fontra</span></span></div><ul class="log" id="log"></ul></div>
+<div class="card" id="imgCard" hidden><div class="row"><span class="name">Last image</span><span class="time" id="imgName"></span></div><img id="img" alt="Last image the agent drew"></div>
 </main><script>
 const $=id=>document.getElementById(id);let S=null,imgStamp="";
 async function post(p,b){await fetch(p,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(b||{})});tick()}
 $("linkBtn").onclick=()=>post("/api/link",{on:!S.link});$("fStart").onclick=()=>post("/api/fontra/start");$("fStop").onclick=()=>post("/api/fontra/stop");
 function tag(el,cls,text){el.className="tag "+cls;el.textContent=text}
-async function tick(){let r;try{r=await fetch("/api/status");S=await r.json()}catch(e){tag($("mTag"),"down","Not running");$("mDetail").textContent="This page stops when the MCP server stops. Start it from Claude Code with /mcp.";return}
-tag($("mTag"),"on","Running");$("mDetail").textContent=`Process ${S.pid}, running since ${S.since}. Claude Code starts and stops it; use /mcp there.`;
+async function tick(){let r;try{r=await fetch("/api/status");S=await r.json()}catch(e){tag($("mTag"),"down","Not running");$("mDetail").textContent="This page stops when the MCP server stops. Start it from your agent's MCP settings.";return}
+tag($("mTag"),"on","Running");$("mDetail").textContent=`Process ${S.pid} for ${S.client}, running since ${S.since}. The agent starts and stops it.`;$("linkName").textContent=`${S.client} link`;
 tag($("linkTag"),S.link?(S.connected?"on":"off"):"off",S.link?(S.connected?"Connected":"On, idle"):"Off");
-$("linkDetail").textContent=S.link?(S.connected?`Claude is a second client on ${S.project}.`:"Claude connects on its next tool call."):"Claude's tools refuse to read or edit until you turn the link on.";
+$("linkDetail").textContent=S.link?(S.connected?`${S.client} is a second client on ${S.project}.`:`${S.client} connects on its next tool call.`):"The agent's tools refuse to read or edit until you turn the link on.";
 $("linkBtn").textContent=S.link?"Turn off":"Turn on";
 tag($("fTag"),S.fontra_up?"on":"down",S.fontra_up?"Running":"Stopped");
 $("fDetail").innerHTML=S.fontra_up?`<a href="${S.editor}" target="_blank">Open ${S.project} in Fontra</a> · ${S.fontra}`:(S.serve_dir?`Start serves ${S.serve_dir}.`:"Started outside this server.");
 $("fStart").disabled=S.fontra_up||!S.serve_dir;$("fStop").disabled=!S.fontra_up;
 if(S.image){$("imgCard").hidden=false;$("imgName").textContent=S.image;const st=S.image+S.image_mtime;if(st!==imgStamp){imgStamp=st;$("img").src="/img/"+encodeURIComponent(S.image)+"?t="+S.image_mtime}}
-$("log").innerHTML=S.log.map(e=>`<li><div class="row"><span><span class="src ${e.source}">${e.source=="Fontra"?"You in Fontra":"Claude"}</span>${esc(e.title)}</span><span class="time">${e.t}</span></div>${e.summary?`<div class="detail">${esc(e.summary)}</div>`:""}</li>`).join("")||'<li class="detail">Nothing yet.</li>'}
+$("log").innerHTML=S.log.map(e=>`<li><div class="row"><span><span class="src ${e.source=="Fontra"?"Fontra":"Agent"}">${e.source=="Fontra"?"You in Fontra":esc(S.client)}</span>${esc(e.title)}</span><span class="time">${e.t}</span></div>${e.summary?`<div class="detail">${esc(e.summary)}</div>`:""}</li>`).join("")||'<li class="detail">Nothing yet.</li>'}
 const esc=s=>String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 tick();setInterval(tick,1000);
 </script></body></html>"""
@@ -505,19 +506,28 @@ def fontra_pid():
     return None
 
 
+def local(url):
+    return urlparse(url).hostname in ("127.0.0.1", "localhost")
+
+
 @web.middleware
 async def same_origin(request, handler):
-    """Only this page may press the buttons: refuse POSTs from other sites."""
+    """Only local pages (this one, and Fontra's MCP panel) may press the buttons; CORS lets the panel read and post."""
     origin = request.headers.get("Origin")
-    if request.method == "POST" and origin and urlparse(origin).hostname not in ("127.0.0.1", "localhost"):
-        raise web.HTTPForbidden()
-    return await handler(request)
+    if origin and not local(origin):
+        if request.method != "GET":
+            raise web.HTTPForbidden()
+        return await handler(request)
+    resp = web.Response() if request.method == "OPTIONS" else await handler(request)
+    if origin:
+        resp.headers.update({"Access-Control-Allow-Origin": origin, "Access-Control-Allow-Headers": "content-type", "Access-Control-Allow-Methods": "GET, POST"})
+    return resp
 
 
 async def ui_status(request):
     img = STATE["image"]
     mtime = os.path.getmtime(os.path.join(OUT, img)) if img and os.path.exists(os.path.join(OUT, img)) else 0
-    return web.json_response(dict(pid=os.getpid(), since=time.strftime("%H:%M", time.localtime(STATE["since"])), link=STATE["link"], connected=F.connected,
+    return web.json_response(dict(client=STATE["client"], pid=os.getpid(), since=time.strftime("%H:%M", time.localtime(STATE["since"])), link=STATE["link"], connected=F.connected,
                                   fontra=F.url, fontra_up=await F.up(), project=PROJECT, serve_dir=SERVE_DIR,
                                   editor=f"{F.url}/editor.html?project={quote(PROJECT)}", log=list(STATE["log"]), image=img, image_mtime=mtime))
 
@@ -548,6 +558,21 @@ async def ui_stop(request):
     return web.json_response({"ok": bool(pid)})
 
 
+async def ui_target(request):
+    """Point the agent at another Fontra (the panel sends its own origin and project)."""
+    global PROJECT
+    d = await request.json()
+    url, project = d.get("url", "").rstrip("/"), d.get("project")
+    if not local(url) or not project:
+        raise web.HTTPBadRequest(text="url must be a localhost Fontra and project is required")
+    await F.disconnect()
+    F.url, F.project, PROJECT = url, project, project
+    F.snap.clear()
+    F.events.clear()
+    log("Fontra", "You pointed the agent at this Fontra", f"{url} {project}")
+    return web.json_response({"fontra": url, "project": project})
+
+
 async def ui_img(request):
     name = os.path.basename(request.match_info["name"])
     path = os.path.join(OUT, name)
@@ -560,11 +585,11 @@ async def start_ui():
     app = web.Application(middlewares=[same_origin])
     app.add_routes([web.get("/", lambda r: web.Response(text=PAGE, content_type="text/html")), web.get("/api/status", ui_status),
                     web.post("/api/link", ui_link), web.post("/api/fontra/start", ui_start), web.post("/api/fontra/stop", ui_stop),
-                    web.get("/img/{name}", ui_img)])
+                    web.post("/api/target", ui_target), web.get("/img/{name}", ui_img)])
     runner = web.AppRunner(app, access_log=None)
     await runner.setup()
-    first = int(os.environ.get("FONTRA_LIVE_UI_PORT", "8765"))
-    for port in range(first, first + 6):     # one page per running MCP server (one per Claude session)
+    first = int(os.environ.get("FONTRA_LIVE_UI_PORT", "8780"))
+    for port in range(first, first + 6):     # one page per running MCP server (one per agent session)
         try:
             await web.TCPSite(runner, "127.0.0.1", port).start()
             STATE["ui"] = f"http://127.0.0.1:{port}"
@@ -579,6 +604,7 @@ async def start_ui():
 async def handle(req):
     m, p = req.get("method"), req.get("params") or {}
     if m == "initialize":
+        STATE["client"] = (p.get("clientInfo") or {}).get("name") or "Agent"
         return {"protocolVersion": p.get("protocolVersion", "2025-06-18"), "capabilities": {"tools": {}},
                 "serverInfo": {"name": "fontra-live", "version": "0.2"}}
     if m == "tools/list":

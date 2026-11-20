@@ -431,6 +431,7 @@ export const strings = {
   "sidebar.glyph-note.undo.edit": "edit glyph note",
   "sidebar.glyph-search": "Glyph Search",
   "sidebar.glyphs.search": "Search glyphs",
+  "sidebar.mcp": "MCP",
   "sidebar.reference-font": "Reference Font",
   "sidebar.reference-font.custom-character": "Custom character",
   "sidebar.reference-font.dialog.title":
